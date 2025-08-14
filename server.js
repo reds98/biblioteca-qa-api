@@ -1,5 +1,5 @@
 // ========================================
-// 📚 API BIBLIOTECA PERSONAL - QA TESTING
+// 📚 API BIBLIOTECA PERSONAL - QA TESTING (ACTUALIZADA)
 // ========================================
 
 const express = require('express');
@@ -53,7 +53,7 @@ const STUDENT_THEMES = {
     description: 'Caza conocimiento en manada'
   },
   'SOFIA': { 
-    emoji: '🦌', 
+    emoji: '🦊', 
     theme: 'Cierva Intelectual', 
     color: '#EA580C',
     description: 'Astuta coleccionista de sabiduría'
@@ -376,16 +376,21 @@ class DatabaseManager {
     };
   }
 
+  // ========================================
+  // 🆕 RESETEAR BASE DE DATOS COMPLETA - AHORA SIN AUTENTICACIÓN
+  // ========================================
   async resetDatabase(studentId) {
     const db = await this.readStudentDb(studentId);
     const deletedCount = db.books.length;
     const totalOps = db.metadata?.totalOperations || 0;
+    const hadUser = !!db.user;
     
+    // LIMPIAR TODO: usuario Y libros
     const cleanDb = {
-      user: db.user,
+      user: null,  // ← AHORA TAMBIÉN ELIMINAMOS EL USUARIO
       books: [],
       metadata: {
-        createdAt: db.metadata?.createdAt || new Date().toISOString(),
+        createdAt: new Date().toISOString(),
         lastAccess: new Date().toISOString(),
         totalOperations: 0,
         resetAt: new Date().toISOString(),
@@ -397,6 +402,7 @@ class DatabaseManager {
     
     return {
       deletedBooks: deletedCount,
+      deletedUser: hadUser,
       totalOperations: totalOps
     };
   }
@@ -496,7 +502,8 @@ app.get('/:student', validateStudent, async (req, res) => {
         public: [
           `GET /${studentId.toLowerCase()}/`,
           `POST /${studentId.toLowerCase()}/auth/register`,
-          `POST /${studentId.toLowerCase()}/auth/login`
+          `POST /${studentId.toLowerCase()}/auth/login`,
+          `DELETE /${studentId.toLowerCase()}/reset` // ← MOVIDO A PÚBLICO
         ],
         protected: [
           `GET /${studentId.toLowerCase()}/profile`,
@@ -505,8 +512,7 @@ app.get('/:student', validateStudent, async (req, res) => {
           `GET /${studentId.toLowerCase()}/books/:id`,
           `PUT /${studentId.toLowerCase()}/books/:id`,
           `DELETE /${studentId.toLowerCase()}/books/:id`,
-          `GET /${studentId.toLowerCase()}/stats`,
-          `DELETE /${studentId.toLowerCase()}/reset`
+          `GET /${studentId.toLowerCase()}/stats`
         ]
       },
       welcomeMessage: `¡Bienvenido a tu biblioteca personal, ${studentConfig.fullName.split(' ')[0]}! ${studentConfig.theme.emoji}`,
@@ -558,7 +564,8 @@ app.post('/:student/auth/register', validateStudent, async (req, res) => {
     if (error.message === 'Usuario ya existe') {
       return res.status(409).json({
         error: 'Ya existe un usuario registrado para este estudiante',
-        code: 'USER_ALREADY_EXISTS'
+        code: 'USER_ALREADY_EXISTS',
+        hint: 'Usa el endpoint DELETE /{student}/reset para limpiar y empezar de nuevo'
       });
     }
     
@@ -626,6 +633,59 @@ app.post('/:student/auth/login', validateStudent, async (req, res) => {
     });
   }
 });
+
+// ========================================
+// 🆕 NUEVO ENDPOINT PÚBLICO: DELETE /{student}/reset
+// ========================================
+app.delete('/:student/reset', validateStudent, async (req, res) => {
+  try {
+    const { studentId, studentConfig } = req;
+    const { confirmReset, confirmation } = req.body;
+
+    if (!confirmReset || confirmReset !== true) {
+      return res.status(400).json({
+        error: 'Debes confirmar el reseteo con "confirmReset: true"',
+        code: 'CONFIRMATION_REQUIRED',
+        hint: 'Incluye { "confirmReset": true, "confirmation": "DELETE_ALL_MY_DATA" }'
+      });
+    }
+
+    if (!confirmation || confirmation !== 'DELETE_ALL_MY_DATA') {
+      return res.status(400).json({
+        error: 'Debes incluir "confirmation: DELETE_ALL_MY_DATA"',
+        code: 'INVALID_CONFIRMATION',
+        hint: 'El texto debe ser exactamente: DELETE_ALL_MY_DATA'
+      });
+    }
+
+    const result = await db.resetDatabase(studentId);
+
+    res.json({
+      message: '🚨 Base de datos completamente reseteada',
+      warning: 'TODOS los datos han sido eliminados permanentemente',
+      student: studentId,
+      resetAt: new Date().toISOString(),
+      deletedItems: {
+        books: result.deletedBooks,
+        user: result.deletedUser,
+        totalOperations: result.totalOperations
+      },
+      nextStep: 'Ahora puedes registrarte nuevamente con POST /{student}/auth/register',
+      theme: `${studentConfig.theme.emoji} ${studentConfig.theme.theme}`
+    });
+
+  } catch (error) {
+    console.error('Error en reset:', error);
+    res.status(500).json({ 
+      error: 'Error interno del servidor',
+      code: 'RESET_ERROR'
+    });
+  }
+});
+
+// ========================================
+// 🔒 ENDPOINTS PROTEGIDOS (CON AUTENTICACIÓN)
+// ========================================
 
 // 4. GET /{student}/profile - Perfil
 app.get('/:student/profile', validateStudent, verifyToken, async (req, res) => {
@@ -801,42 +861,6 @@ app.get('/:student/stats', validateStudent, verifyToken, async (req, res) => {
   }
 });
 
-// 11. DELETE /{student}/reset - Resetear base de datos
-app.delete('/:student/reset', validateStudent, verifyToken, async (req, res) => {
-  try {
-    const { studentId } = req;
-    const { confirmReset, confirmation } = req.body;
-
-    if (!confirmReset || confirmReset !== true) {
-      return res.status(400).json({
-        error: 'Debes confirmar el reseteo con "confirmReset: true"',
-        code: 'CONFIRMATION_REQUIRED'
-      });
-    }
-
-    if (!confirmation || confirmation !== 'DELETE_ALL_MY_DATA') {
-      return res.status(400).json({
-        error: 'Debes incluir "confirmation: DELETE_ALL_MY_DATA"',
-        code: 'INVALID_CONFIRMATION'
-      });
-    }
-
-    const result = await db.resetDatabase(studentId);
-
-    res.json({
-      message: '🚨 Base de datos completamente reseteada',
-      warning: 'Todos tus libros han sido eliminados permanentemente',
-      student: studentId,
-      resetAt: new Date().toISOString(),
-      deletedItems: result,
-      nextStep: 'Puedes comenzar a agregar libros nuevamente'
-    });
-
-  } catch (error) {
-    res.status(500).json({ error: 'Error interno del servidor' });
-  }
-});
-
 // ========================================
 // 🚀 SERVIDOR
 // ========================================
@@ -851,6 +875,8 @@ app.get('/', (req, res) => {
       `http://localhost:${PORT}/${student.toLowerCase()}/`
     ),
     documentation: 'Cada estudiante tiene su propia API independiente',
+    newFeature: '🆕 Reset endpoint ahora es PÚBLICO (sin autenticación)',
+    resetHint: 'Usa DELETE /{student}/reset para limpiar datos sin necesidad de login',
     timestamp: new Date().toISOString()
   });
 });
@@ -883,9 +909,12 @@ app.listen(PORT, () => {
   console.log('   • GET /{student}/              - Health check');
   console.log('   • POST /{student}/auth/register - Registro');
   console.log('   • POST /{student}/auth/login    - Login');
-  console.log('   • GET /{student}/books          - Listar libros');
-  console.log('   • POST /{student}/books         - Agregar libro');
-  console.log('   • GET /{student}/stats          - Estadísticas');
+  console.log('   • 🆕 DELETE /{student}/reset      - Resetear (SIN AUTENTICACIÓN)');
+  console.log('   • GET /{student}/books          - Listar libros (con auth)');
+  console.log('   • POST /{student}/books         - Agregar libro (con auth)');
+  console.log('   • GET /{student}/stats          - Estadísticas (con auth)');
+  console.log('');
+  console.log('🆕 NUEVO: Reset sin autenticación para resolver olvido de credenciales');
   console.log('');
   console.log('✨ ¡API lista para testing con Postman!');
   console.log('');
